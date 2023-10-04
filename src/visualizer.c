@@ -1,6 +1,15 @@
 #include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
 #include <assert.h>
 #include "raylib.h"
+
+#define FFT_SIZE 1024
+
+typedef struct {
+    char *file_path;
+    Music music;
+} Track;
 
 int main(int argc, char *argv[]) {
 
@@ -10,12 +19,19 @@ int main(int argc, char *argv[]) {
     SetTargetFPS(60);
 
     InitAudioDevice();
-    Music music = LoadMusicStream(argv[1]);
-    PlayMusicStream(music);
+    
+    Track current_track = (Track) {
+        .file_path = argv[1],
+        .music = LoadMusicStream(argv[1])
+    };
+
+    PlayMusicStream(current_track.music);
+
+    float *audioData = (float *)malloc(sizeof(float)*FFT_SIZE);
 
     while (!WindowShouldClose()) {
-        if (IsMusicStreamPlaying(music)) {
-            UpdateMusicStream(music);
+        if (IsMusicStreamPlaying(current_track.music)) {
+            UpdateMusicStream(current_track.music);
         }
 
         BeginDrawing();
