@@ -1,3 +1,4 @@
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -5,11 +6,45 @@
 #include "raylib.h"
 
 #define FFT_SIZE 1024
+#define N (1<<13)
 
 typedef struct {
     char *file_path;
     Music music;
 } Track;
+
+typedef struct {
+    float in_raw[N]; // Raw data from audio stream buffer
+    float in_hann[N]; // Data with hann function applied
+} FFT_Analyzer;
+
+FFT_Analyzer *fft = NULL;
+
+void init_fft() {
+    fft = (FFT_Analyzer*)malloc(sizeof(FFT_Analyzer));
+    memset(fft, 0, sizeof(fft));
+}
+
+void fft_clean() {
+    memset(fft->in_raw, 0, sizeof(fft->in_raw));
+    memset(fft->in_hann, 0, sizeof(fft->in_hann));
+}
+
+void apply_hann_function() {
+    for (size_t i = 0; i < N; i++) {
+        float t = (float)i/(N-1);
+        float hann = 0.5 - 0.5*cosf(2*PI*t);
+        fft->in_hann[i] = fft->in_raw[i]*hann;
+    }
+}
+
+void callback(void *bufferData, unsigned int frames) {
+    float (*fs)[2] = bufferData;
+    for (size_t i = 0; i < frames; i++) {
+        memmove(fft->in_raw, fft->in_raw + 1, (N-1)*sizeof(fft->in_raw[0]));
+        fft->in_raw[N-1] = fs[i][0];
+    } 
+}
 
 int main(int argc, char *argv[]) {
 
@@ -17,27 +52,33 @@ int main(int argc, char *argv[]) {
 
     InitWindow(800,600, "Music Visualizer");
     SetTargetFPS(60);
-
+    
+    init_fft();
     InitAudioDevice();
     
     Track current_track = (Track) {
         .file_path = argv[1],
         .music = LoadMusicStream(argv[1])
     };
+    
+    AttachAudioStreamProcessor(current_track.music.stream, callback);
 
     PlayMusicStream(current_track.music);
 
-    float *audioData = (float *)malloc(sizeof(float)*FFT_SIZE);
-
     while (!WindowShouldClose()) {
+        BeginDrawing();
+
         if (IsMusicStreamPlaying(current_track.music)) {
             UpdateMusicStream(current_track.music);
+            apply_hann_function();
         }
 
-        BeginDrawing();
+        
+
         ClearBackground(BLACK);
         EndDrawing();
 
+        fft_clean();
     }
 
     CloseAudioDevice();
