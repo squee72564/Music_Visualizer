@@ -6,8 +6,8 @@
 #include <assert.h>
 #include "raylib.h"
 
-#define N (1<<13)
-#define SB (1<<12)
+#define N (1<<15)
+#define SB (1<<13)
 
 typedef struct
 {
@@ -17,9 +17,13 @@ typedef struct
 
 typedef struct
 {
-    float complex in_raw[N];  // Raw data from audio stream buffer
-    float complex in_hann[N]; // Data with hann function applied
-    float complex out_raw[N];
+    float complex in_rawL[N];  // Raw data from audio stream buffer
+    float complex in_hannL[N]; // Data with hann function applied
+    float complex out_rawL[N];
+
+    float complex in_rawR[N];  // Raw data from audio stream buffer
+    float complex in_hannR[N]; // Data with hann function applied
+    float complex out_rawR[N];
 } FFT_Analyzer;
 
 typedef struct
@@ -44,8 +48,8 @@ void fft_init()
 
 void fft_clean()
 {
-    memset(fft->in_raw, 0, sizeof(fft->in_raw));
-    memset(fft->in_hann, 0, sizeof(fft->in_hann));
+    memset(fft->in_rawL, 0, sizeof(fft->in_rawL));
+    memset(fft->in_hannL, 0, sizeof(fft->in_hannL));
 }
 
 void _fft(float complex in[], float complex out[], int n, int step)
@@ -70,7 +74,8 @@ void apply_hann_function()
     {
         float t = (float)i / (N - 1);
         float hann = 0.5 - 0.5 * cosf(2 * PI * t);
-        fft->in_hann[i] = fft->in_raw[i] * hann;
+        fft->in_hannL[i] = fft->in_rawL[i] * hann;
+        fft->in_hannR[i] = fft->in_rawR[i] * hann;
     }
 }
 
@@ -78,8 +83,11 @@ void fft_process()
 {
     apply_hann_function();
 
-    memcpy(fft->out_raw, fft->in_hann, sizeof(fft->out_raw));
-    _fft(fft->out_raw, fft->in_hann, N, 1);
+    memcpy(fft->out_rawL, fft->in_hannL, sizeof(fft->out_rawL));
+    memcpy(fft->out_rawR, fft->in_hannR, sizeof(fft->out_rawR));
+
+    _fft(fft->out_rawL, fft->in_hannL, N, 1);
+    _fft(fft->out_rawR, fft->in_hannR, N, 1);
 
     // TODO: Additional Processing on fft wave to make it look nicer
 }
@@ -90,8 +98,11 @@ void fft_callback(void *bufferData, unsigned int frames)
 
     for (size_t i = 0; i < frames; i++)
     {
-        memmove(fft->in_raw, fft->in_raw + 1, (N - 1) * sizeof(fft->in_raw[0]));
-        fft->in_raw[N - 1] = fs[i][0] + 0.0f * I; // Left channel for fft
+        memmove(fft->in_rawL, fft->in_rawL + 1, (N - 1) * sizeof(fft->in_rawL[0]));
+        fft->in_rawL[N - 1] = fs[i][0] + 0.0f * I; // Left channel for fft
+
+        memmove(fft->in_rawR, fft->in_rawR + 1, (N - 1) * sizeof(fft->in_rawR[0]));
+        fft->in_rawR[N - 1] = fs[i][1] + 0.0f * I; // Right channel for fft
 
         memmove(aBuff->left, aBuff->left + 1, (SB - 1) * sizeof(aBuff->left[0]));
         aBuff->left[SB - 1] = fs[i][0]; // Left channel
@@ -107,31 +118,48 @@ void fft_visualize() {
     // TODO: Scale x and y axis to better show waveform
     
     int w = GetRenderWidth();
-    int h = GetRenderHeight();
+    int h = GetRenderHeight()/2;
     float d = (float)w / (N/2);
-    float scale = 6.0f;
+    float scale = 50.0f;
 
     Vector2 pts[N / 2] = {0};
-
+    Vector2 ptsR[N / 2] = {0};
+    
     for (size_t i = 0; i < N/2; i++)
     {
-        Color c1 = (Color){155, 100, 0, cabsf(fft->out_raw[i]) * 50};
+        // Scaling the values of the L and R data logarithmically as function of i
+        //float scalingX = pow(10, i / (float)((N/2)-1));
+        float scalingX = .3*log(i)*(N/2);
+        int nearestIdx = (int)round(scalingX * i);
 
-        pts[i] = (Vector2){i * d, h / 2 + fft->out_raw[i] * scale};
-        DrawCircleV(pts[i], 1.2f, c1);
+        float logScalingY = logf(0.008f*(float)i+1.0f);
+        pts[i] = (Vector2){i * d, h - 3*h / 4 + logScalingY * fft->out_rawL[i] * scale};
+
+        ptsR[i] = (Vector2){i * d, h - h / 4 + logScalingY * fft->out_rawR[i] * scale};
+
+        if (i % 80 == 0) {
+            char buffT[32] = {0};
+            char *buffP = &buffT[0];
+            snprintf(buffT, 32, "%.1fhz", (float)((nearestIdx)*44100)/(N/2));
+            DrawText(buffP, pts[i].x, h - 2*h/4, 3, WHITE);
+        }
     }
-    Color c1 = (Color){246, 255, 32, 65};
+    
+    Color c1 = (Color){100, 0, 255, 85};
+    Color cR = (Color){255, 0, 100, 85};
+
     DrawLineStrip(&pts[0], N/2, c1);
+    DrawLineStrip(&ptsR[0], N/2, cR);
 }
 
 void drawWave() {
     int w = GetRenderWidth();
-    int h = GetRenderHeight();
+    int h = GetRenderHeight()/2;
     float rectw = (float)w / SB;
-    int scale = 980;
+    int scale = 420;
 
     Color c2 = (Color){0, 0, 255, 0};
-    Color c3 = (Color){200, 0, 55, 185};
+    Color c3 = (Color){200, 0, 55, 165};
     
     if (rectw < 1.0f)
     {
@@ -143,11 +171,20 @@ void drawWave() {
 
     for (size_t i = 0; i < SB; i++)
     {
-        rec = (Rectangle){.x = i * rectw, .y = h / 2 - 1, .width = rectw, .height = scale*aBuff->left[i]};
-        rec2 = (Rectangle){.x = i * rectw, .y = h / 2, .width = rectw, .height = scale*aBuff->right[i]};
+        rec = (Rectangle){.x = i * rectw, .y = h + h / 2-1, .width = rectw, .height = scale*fabs(aBuff->left[i])};
+        rec2 = (Rectangle){.x = i * rectw, .y = h + h / 2, .width = rectw, .height = scale*fabs(aBuff->right[i])};
 
-        DrawRectangleGradientV(rec.x, rec.y, rec.width, rec.height, c3, c2);
-        DrawRectangleGradientV(rec2.x, rec2.y - rec2.height, rec2.width, rec2.height, c2, c3);
+        if (aBuff->left[i] < 0) {
+            DrawRectangleGradientV(rec.x, rec.y - rec.height + 2, rec.width, rec.height, c2, c3);
+        } else {
+            DrawRectangleGradientV(rec.x, rec.y, rec.width, rec.height, c3, c2);
+        }
+
+        if (aBuff->right[i] < 0) {
+            DrawRectangleGradientV(rec2.x, rec2.y, rec2.width, rec2.height, c3, c2);
+        } else {
+            DrawRectangleGradientV(rec2.x, rec2.y - rec2.height, rec2.width, rec2.height, c2, c3);
+        }
     }
     
 }
@@ -173,6 +210,7 @@ int main(int argc, char *argv[])
     AttachAudioStreamProcessor(current_track.music.stream, fft_callback);
 
     PlayMusicStream(current_track.music);
+    SetAudioStreamVolume(current_track.music.stream, 0.1f);
 
     SeekMusicStream(current_track.music, 40.0f + (GetMusicTimeLength(current_track.music) / 2.0f));
 
@@ -197,7 +235,7 @@ int main(int argc, char *argv[])
             if (showFFT)
             {
                 fft_process();
-                fft_visualize();
+//                fft_visualize();
             }
         }
 
