@@ -20,16 +20,18 @@ typedef struct
     float complex in_rawL[N];  // Raw data from audio stream buffer
     float complex in_hannL[N]; // Data with hann function applied
     float complex out_rawL[N];
+    float complex out_logL[N];
 
     float complex in_rawR[N];  // Raw data from audio stream buffer
     float complex in_hannR[N]; // Data with hann function applied
     float complex out_rawR[N];
+    float complex out_logR[N];
 } FFT_Analyzer;
 
 typedef struct
 {
-    float right[SB];
-    float left[SB];
+    float complex right[SB];
+    float complex left[SB];
 } Audio_Buffer;
 
 Audio_Buffer *aBuff = NULL;
@@ -79,8 +81,7 @@ void apply_hann_function()
     }
 }
 
-void fft_process()
-{
+size_t fft_process() {
     apply_hann_function();
 
     memcpy(fft->out_rawL, fft->in_hannL, sizeof(fft->out_rawL));
@@ -89,7 +90,34 @@ void fft_process()
     _fft(fft->out_rawL, fft->in_hannL, N, 1);
     _fft(fft->out_rawR, fft->in_hannR, N, 1);
 
-    // TODO: Additional Processing on fft wave to make it look nicer
+    // Squash Frequencies
+    float step = 1.006f;
+    float lowf = 1.0f;    
+    size_t s = 0;
+    float max_ampL = 1.0f;
+    float max_ampR = 1.0f;
+    for (float f = lowf; (size_t) f < N/2; f = ceil(f*step)) {
+        float f1 = ceil(f*step);
+        float maxL = 0.0f;
+        float maxR = 0.0f;
+        for ( size_t q = (size_t) f; q < N/2 && q < (size_t) f1; q++) {
+            float r = cabsf(fft->out_rawR[q]);
+            float l = cabsf(fft->out_rawL[q]);
+            if ( r > maxR ) maxR = r;
+            if ( l > maxL ) maxL = l;
+        }
+        if (max_ampL < maxL) max_ampL = maxL;
+        if (max_ampR < maxR) max_ampR = maxR;
+        fft->out_logR[s++] = maxR;
+        fft->out_logL[s++] = maxL;
+    }
+
+    // Normalize
+    for ( size_t i = 0; i < s; i++) {
+        fft->out_logL[i] /= max_ampL;
+        fft->out_logR[i] /= max_ampR;
+    }
+    return s;
 }
 
 void fft_callback(void *bufferData, unsigned int frames)
@@ -105,51 +133,33 @@ void fft_callback(void *bufferData, unsigned int frames)
         fft->in_rawR[N - 1] = fs[i][1] + 0.0f * I; // Right channel for fft
 
         memmove(aBuff->left, aBuff->left + 1, (SB - 1) * sizeof(aBuff->left[0]));
-        aBuff->left[SB - 1] = fs[i][0]; // Left channel
+        aBuff->left[SB - 1] = fs[i][0] + 0.0f * I; // Left channel
 
         memmove(aBuff->right, aBuff->right + 1, (SB - 1) * sizeof(aBuff->right[0]));
-        aBuff->right[SB - 1] = fs[i][1]; // Right channel
+        aBuff->right[SB - 1] = fs[i][1] + 0.0f * I; // Right channel
     }
 }
 
-void fft_visualize() {
-
-
-    // TODO: Scale x and y axis to better show waveform
-    
+void fft_visualize(size_t frames) {
     int w = GetRenderWidth();
     int h = GetRenderHeight()/2;
-    float d = (float)w / (N/2);
-    float scale = 50.0f;
+    float d = (float)w / frames;
+    float scale = 160.0f;
 
-    Vector2 pts[N / 2] = {0};
+    Vector2 ptsL[N / 2] = {0};
     Vector2 ptsR[N / 2] = {0};
     
-    for (size_t i = 0; i < N/2; i++)
-    {
-        // Scaling the values of the L and R data logarithmically as function of i
-        //float scalingX = pow(10, i / (float)((N/2)-1));
-        float scalingX = .3*log(i)*(N/2);
-        int nearestIdx = (int)round(scalingX * i);
+    for (size_t i = 0; i < frames; i++) {
+        ptsL[i] = (Vector2){i * d, h - 2*h / 4 + cabsf(fft->out_logL[i]) * scale};
 
-        float logScalingY = logf(0.008f*(float)i+1.0f);
-        pts[i] = (Vector2){i * d, h - 3*h / 4 + logScalingY * fft->out_rawL[i] * scale};
-
-        ptsR[i] = (Vector2){i * d, h - h / 4 + logScalingY * fft->out_rawR[i] * scale};
-
-        if (i % 80 == 0) {
-            char buffT[32] = {0};
-            char *buffP = &buffT[0];
-            snprintf(buffT, 32, "%.1fhz", (float)((nearestIdx)*44100)/(N/2));
-            DrawText(buffP, pts[i].x, h - 2*h/4, 3, WHITE);
-        }
+        ptsR[i] = (Vector2){i * d, h - 2*h / 4 - cabsf(fft->out_logR[i]) * scale};
     }
     
     Color c1 = (Color){100, 0, 255, 85};
     Color cR = (Color){255, 0, 100, 85};
 
-    DrawLineStrip(&pts[0], N/2, c1);
-    DrawLineStrip(&ptsR[0], N/2, cR);
+    DrawLineStrip(ptsL, frames, c1);
+    DrawLineStrip(ptsR, frames, cR);
 }
 
 void drawWave() {
@@ -171,20 +181,11 @@ void drawWave() {
 
     for (size_t i = 0; i < SB; i++)
     {
-        rec = (Rectangle){.x = i * rectw, .y = h + h / 2-1, .width = rectw, .height = scale*fabs(aBuff->left[i])};
-        rec2 = (Rectangle){.x = i * rectw, .y = h + h / 2, .width = rectw, .height = scale*fabs(aBuff->right[i])};
+        rec = (Rectangle){.x = i * rectw, .y = h + h / 2-1, .width = rectw, .height = scale*cabsf(aBuff->left[i])};
+        rec2 = (Rectangle){.x = i * rectw, .y = h + h / 2, .width = rectw, .height = scale*cabsf(aBuff->right[i])};
 
-        if (aBuff->left[i] < 0) {
-            DrawRectangleGradientV(rec.x, rec.y - rec.height + 2, rec.width, rec.height, c2, c3);
-        } else {
-            DrawRectangleGradientV(rec.x, rec.y, rec.width, rec.height, c3, c2);
-        }
-
-        if (aBuff->right[i] < 0) {
-            DrawRectangleGradientV(rec2.x, rec2.y, rec2.width, rec2.height, c3, c2);
-        } else {
-            DrawRectangleGradientV(rec2.x, rec2.y - rec2.height, rec2.width, rec2.height, c2, c3);
-        }
+        DrawRectangleGradientV(rec.x, rec.y, rec.width, rec.height, c3, c2);
+        DrawRectangleGradientV(rec2.x, rec2.y - rec2.height, rec2.width, rec2.height, c2, c3);
     }
     
 }
@@ -234,8 +235,8 @@ int main(int argc, char *argv[])
 
             if (showFFT)
             {
-                fft_process();
-//                fft_visualize();
+                size_t frames = fft_process();
+                fft_visualize(frames);
             }
         }
 
