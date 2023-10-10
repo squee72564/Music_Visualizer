@@ -6,8 +6,8 @@
 #include <assert.h>
 #include "raylib.h"
 
-#define N (1<<14)
-#define SB (1<<11)
+#define N (1 << 14)
+#define SB (1 << 11)
 
 typedef struct
 {
@@ -20,12 +20,12 @@ typedef struct
     float complex in_rawL[N];  // Raw data from audio stream buffer
     float complex in_hannL[N]; // Data with hann function applied
     float complex out_rawL[N];
-    float complex out_logL[N];
+    float out_logL[N];
 
     float complex in_rawR[N];  // Raw data from audio stream buffer
     float complex in_hannR[N]; // Data with hann function applied
     float complex out_rawR[N];
-    float complex out_logR[N];
+    float out_logR[N];
 } FFT_Analyzer;
 
 typedef struct
@@ -48,10 +48,10 @@ void fft_init()
     memset(aBuff, 0, sizeof(*aBuff));
 }
 
-void fft_clean()
+void fft_free()
 {
-    memset(fft->in_rawL, 0, sizeof(fft->in_rawL));
-    memset(fft->in_hannL, 0, sizeof(fft->in_hannL));
+    free(fft);
+    free(aBuff);
 }
 
 void _fft(float complex in[], float complex out[], int n, int step)
@@ -70,8 +70,9 @@ void _fft(float complex in[], float complex out[], int n, int step)
     }
 }
 
-void apply_hann_function()
+size_t fft_process()
 {
+    // Apply hann windowing function
     for (size_t i = 0; i < N; i++)
     {
         float t = (float)i / (N - 1);
@@ -79,14 +80,11 @@ void apply_hann_function()
         fft->in_hannL[i] = fft->in_rawL[i] * hann;
         fft->in_hannR[i] = fft->in_rawR[i] * hann;
     }
-}
-
-size_t fft_process() {
-    apply_hann_function();
 
     memcpy(fft->out_rawL, fft->in_hannL, sizeof(fft->out_rawL));
     memcpy(fft->out_rawR, fft->in_hannR, sizeof(fft->out_rawR));
 
+    // Perform FFT
     _fft(fft->out_rawL, fft->in_hannL, N, 1);
     _fft(fft->out_rawR, fft->in_hannR, N, 1);
 
@@ -95,42 +93,54 @@ size_t fft_process() {
     // step variable will also determine the resultion of the resulting fft for display; lower step
     // means higher resolution
     float step = 1.01f;
-    float lowf = 1.0f;    
+    float lowf = 1.0f;
     size_t s = 0;
     float max_ampL = 1.0f;
     float max_ampR = 1.0f;
 
-    for (float f = lowf; (size_t) f < N/2; f = ceil(f*step)) {
-        float f1 = ceil(f*step);
+    for (float f = lowf; (size_t)f < N / 2; f = ceil(f * step))
+    {
+        float f1 = ceil(f * step);
+        int maxLi = 0;
+        int maxRi = 0;
         float maxL = 0.0f;
         float maxR = 0.0f;
-        for ( size_t q = (size_t) f; q < N/2 && q < (size_t) f1; q++) {
+        for (size_t q = (size_t)f; q < N / 2 && q < (size_t)f1; q++)
+        {
             float r = cabsf(fft->out_rawR[q]);
             float l = cabsf(fft->out_rawL[q]);
-            if ( r > maxR ) maxR = r;
-            if ( l > maxL ) maxL = l;
+            if (r > maxR)
+            {
+                maxR = r;
+                maxRi = q;
+            }
+            if (l > maxL)
+            {
+                maxL = l;
+                maxLi = q;
+            }
         }
-        fft->out_logR[s++] = maxR;
-        fft->out_logL[s++] = maxL;
+
+        // Scale lagarithmically
+        fft->out_logR[s++] = log10f(1.0f + cabsf(fft->out_rawL[maxRi]));
+        fft->out_logL[s++] = log10f(1.0f + cabsf(fft->out_rawR[maxLi]));
     }
 
-    // Scale Y logarithmically
-    for ( size_t i = 0; i < s; i++) {
-        if (cabsf(fft->out_logL[i]) > 0)
-            fft->out_logL[i] = log10f(1.0f+cabsf(fft->out_logL[i]));
-        if (cabsf(fft->out_logR[i]) > 0)
-            fft->out_logR[i] = log10f(1.0f+cabsf(fft->out_logR[i]));
-
-        float l = cabsf(fft->out_logL[i]);
-        float r = cabsf(fft->out_logR[i]);
-        if (l > max_ampL) max_ampL = l;
-        if (r > max_ampR) max_ampR = r;
+    // Get max and normalize
+    for (size_t i = 0; i < s; i++)
+    {
+        float l = fft->out_logL[i];
+        float r = fft->out_logR[i];
+        if (l > max_ampL)
+            max_ampL = l;
+        if (r > max_ampR)
+            max_ampR = r;
     }
 
-    // Normalize
-    for ( size_t i = 0; i < s; i++) {
-        fft->out_logL[i] /= max_ampL;
-        fft->out_logR[i] /= max_ampR;
+    for (size_t i = 0; i < s; i++)
+    {
+        fft->out_logL[i] = fft->out_logL[i] / max_ampL;
+        fft->out_logR[i] = fft->out_logR[i] / max_ampR;
     }
 
     return s;
@@ -156,21 +166,23 @@ void fft_callback(void *bufferData, unsigned int frames)
     }
 }
 
-void fft_visualize(size_t frames) {
+void fft_visualize(size_t frames)
+{
     int w = GetRenderWidth();
-    int h = GetRenderHeight()/2;
+    int h = GetRenderHeight() / 2;
     float d = (float)w / frames;
     float scale = 170.0f;
 
     Vector2 ptsL[N / 2] = {0};
     Vector2 ptsR[N / 2] = {0};
-    
-    for (size_t i = 0; i < frames; i++) {
-        ptsL[i] = (Vector2){i * d, (h / 2) + cabsf(fft->out_logL[i]) * scale};
 
-        ptsR[i] = (Vector2){i * d, (h / 2) - cabsf(fft->out_logR[i]) * scale};
+    for (size_t i = 0; i < frames; i++)
+    {
+        ptsL[i] = (Vector2){i * d, (h / 2) + fft->out_logL[i] * scale};
+
+        ptsR[i] = (Vector2){i * d, (h / 2) - fft->out_logR[i] * scale};
     }
-    
+
     Color c1 = (Color){100, 0, 255, 65};
     Color cR = (Color){255, 0, 100, 65};
 
@@ -178,44 +190,43 @@ void fft_visualize(size_t frames) {
     DrawLineStrip(ptsR, frames, cR);
 }
 
-void drawWave() {
+void drawWave()
+{
     int w = GetRenderWidth();
-    int h = GetRenderHeight()/2;
+    int h = GetRenderHeight() / 2;
     float rectw = (float)w / SB;
     int scale = 300;
 
     Color c2 = (Color){0, 0, 255, 0};
     Color c3 = (Color){200, 0, 55, 165};
-    
+
     if (rectw < 1.0f)
     {
         rectw = 1.0f;
     }
 
-    Rectangle rec;
-    Rectangle rec2;
-
     float max = 0.0f;
-    
-    for ( int i = 0; i < SB; i++) {
-        if (cabsf(aBuff->left[i]) > max) max = cabsf(aBuff->left[i]);  
-        if (cabsf(aBuff->right[i]) > max) max = cabsf(aBuff->right[i]);  
+
+    for (int i = 0; i < SB; i++)
+    {
+        if (cabsf(aBuff->left[i]) > max)
+            max = cabsf(aBuff->left[i]);
+        if (cabsf(aBuff->right[i]) > max)
+            max = cabsf(aBuff->right[i]);
     }
 
     for (size_t i = 0; i < SB; i++)
     {
-        rec = (Rectangle){.x = i * rectw, .y = h + h / 2-1, .width = rectw, .height = scale*(cabsf(aBuff->left[i])/max)};
-        rec2 = (Rectangle){.x = i * rectw, .y = h + h / 2, .width = rectw, .height = scale*(cabsf(aBuff->right[i])/max)};
+        Rectangle rec = (Rectangle){.x = i * rectw, .y = h + h / 2 - 1, .width = rectw, .height = scale * (cabsf(aBuff->left[i]) / max)};
+        Rectangle rec2 = (Rectangle){.x = i * rectw, .y = h + h / 2, .width = rectw, .height = scale * (cabsf(aBuff->right[i]) / max)};
 
         DrawRectangleGradientV(rec.x, rec.y, rec.width, rec.height, c3, c2);
         DrawRectangleGradientV(rec2.x, rec2.y - rec2.height, rec2.width, rec2.height, c2, c3);
     }
-    
 }
 
 int main(int argc, char *argv[])
 {
-
     assert(argc > 1);
 
     InitWindow(1024, 900, "Music Visualizer");
@@ -230,6 +241,7 @@ int main(int argc, char *argv[])
 
     bool showWave = true;
     bool showFFT = true;
+    bool isPaused = false;
 
     AttachAudioStreamProcessor(current_track.music.stream, fft_callback);
 
@@ -237,37 +249,50 @@ int main(int argc, char *argv[])
 
     while (!WindowShouldClose())
     {
-
-        if (IsKeyPressed(KEY_Q))
+        int key = GetKeyPressed();
+        switch (key)
+        {
+        case KEY_Q:
             showWave = !showWave;
-        if (IsKeyPressed(KEY_W))
+            break;
+        case KEY_W:
             showFFT = !showFFT;
-        if (IsKeyPressed(KEY_A))
+            break;
+        case KEY_A:
             SeekMusicStream(current_track.music, (GetMusicTimePlayed(current_track.music) - 5.0f));
-        if (IsKeyPressed(KEY_S))
+            break;
+        case KEY_S:
             SeekMusicStream(current_track.music, (GetMusicTimePlayed(current_track.music) + 60.0f));
+            break;
+        case KEY_P:
+            (isPaused) ? ResumeMusicStream(current_track.music) : PauseMusicStream(current_track.music);
+            isPaused = !isPaused;
+            break;
+        default:
+            break;
+        }
 
         BeginDrawing();
+
         ClearBackground(BLACK);
 
         if (IsMusicStreamPlaying(current_track.music))
-        {
             UpdateMusicStream(current_track.music);
 
-            if (showWave)
-                drawWave();
+        if (showWave)
+            drawWave();
 
-            if (showFFT)
-            {
-                size_t frames = fft_process();
-                fft_visualize(frames);
-            }
+        if (showFFT)
+        {
+            size_t frames = fft_process();
+            fft_visualize(frames);
         }
 
         EndDrawing();
     }
 
     CloseAudioDevice();
+    fft_free();
 
     return 0;
 }
