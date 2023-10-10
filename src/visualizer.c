@@ -38,20 +38,25 @@ Audio_Buffer *aBuff = NULL;
 
 FFT_Analyzer *fft = NULL;
 
-void fft_init()
+void audioBuff_init()
 {
     fft = (FFT_Analyzer *)malloc(sizeof(FFT_Analyzer));
     memset(fft, 0, sizeof(*fft));
 
-    // init other buffers for now
     aBuff = (Audio_Buffer *)malloc(sizeof(Audio_Buffer));
     memset(aBuff, 0, sizeof(*aBuff));
 }
 
-void fft_free()
+void audioBuff_free()
 {
     free(fft);
     free(aBuff);
+}
+
+void audioBuff_clean()
+{
+    memset(fft, 0, sizeof(*fft));
+    memset(aBuff, 0, sizeof(*aBuff));
 }
 
 void _fft(float complex in[], float complex out[], int n, int step)
@@ -178,9 +183,15 @@ void fft_visualize(size_t frames)
 
     for (size_t i = 0; i < frames; i++)
     {
-        ptsL[i] = (Vector2){i * d, (h / 2) + fft->out_logL[i] * scale};
+        ptsL[i] = (Vector2) {
+            .x = i * d,
+            .y = ((float)h / 2) + fft->out_logL[i] * h/2
+        };
 
-        ptsR[i] = (Vector2){i * d, (h / 2) - fft->out_logR[i] * scale};
+        ptsR[i] = (Vector2) {
+            .x = i * d,
+            .y = ((float)h / 2) - fft->out_logR[i] * h/2
+        };
     }
 
     Color c1 = (Color){100, 0, 255, 65};
@@ -217,8 +228,19 @@ void drawWave()
 
     for (size_t i = 0; i < SB; i++)
     {
-        Rectangle rec = (Rectangle){.x = i * rectw, .y = h + h / 2 - 1, .width = rectw, .height = scale * (cabsf(aBuff->left[i]) / max)};
-        Rectangle rec2 = (Rectangle){.x = i * rectw, .y = h + h / 2, .width = rectw, .height = scale * (cabsf(aBuff->right[i]) / max)};
+        Rectangle rec = (Rectangle) {
+            .x = i * rectw,
+            .y = h + h / 2 - 1,
+            .width = rectw,
+            .height = h/2 * (cabsf(aBuff->left[i]) / max)
+        };
+        
+        Rectangle rec2 = (Rectangle) {
+            .x = i * rectw,
+            .y = h + h / 2,
+            .width = rectw,
+            .height = h/2 * (cabsf(aBuff->right[i]) / max)
+        };
 
         DrawRectangleGradientV(rec.x, rec.y, rec.width, rec.height, c3, c2);
         DrawRectangleGradientV(rec2.x, rec2.y - rec2.height, rec2.width, rec2.height, c2, c3);
@@ -227,28 +249,35 @@ void drawWave()
 
 int main(int argc, char *argv[])
 {
-    assert(argc > 1);
-
     InitWindow(1024, 900, "Music Visualizer");
     SetTargetFPS(60);
+    SetWindowState(FLAG_WINDOW_RESIZABLE);
+    SetWindowMinSize(800,600);
 
-    fft_init();
+    audioBuff_init();
     InitAudioDevice();
 
-    Track current_track = (Track){
-        .file_path = argv[1],
-        .music = LoadMusicStream(argv[1])};
+    Track current_track;
+
+    if ( argc > 1) {
+        Track current_track = (Track){
+            .file_path = argv[1],
+            .music = LoadMusicStream(argv[1])
+        };
+
+        AttachAudioStreamProcessor(current_track.music.stream, fft_callback);
+
+        PlayMusicStream(current_track.music);
+    }
 
     bool showWave = true;
     bool showFFT = true;
     bool isPaused = false;
 
-    AttachAudioStreamProcessor(current_track.music.stream, fft_callback);
-
-    PlayMusicStream(current_track.music);
 
     while (!WindowShouldClose())
     {
+        // Handle Key Press
         int key = GetKeyPressed();
         switch (key)
         {
@@ -272,6 +301,30 @@ int main(int argc, char *argv[])
             break;
         }
 
+        // Handle File Drop
+        if (IsFileDropped()) {
+            FilePathList fl = LoadDroppedFiles();
+            printf("INFO: FILES DROPPED:\n");
+            for (size_t i = 0; i < fl.count; i++) {
+                char * p = fl.paths[i];
+                printf("\t%s\n", p);
+            }
+
+            StopMusicStream(current_track.music);
+            UnloadMusicStream(current_track.music);
+            audioBuff_clean();
+
+            current_track = (Track) {
+                .file_path = fl.paths[0],
+                .music = LoadMusicStream(fl.paths[0])
+            };
+
+            AttachAudioStreamProcessor(current_track.music.stream, fft_callback);
+            PlayMusicStream(current_track.music);
+
+            UnloadDroppedFiles(fl);
+        } 
+
         BeginDrawing();
 
         ClearBackground(BLACK);
@@ -292,7 +345,7 @@ int main(int argc, char *argv[])
     }
 
     CloseAudioDevice();
-    fft_free();
+    audioBuff_free();
 
     return 0;
 }
