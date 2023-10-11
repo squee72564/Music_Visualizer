@@ -12,8 +12,15 @@
 typedef struct
 {
     char *file_path;
-    Music music;
 } Track;
+
+typedef struct
+{
+    size_t count;
+    int currIdx;
+    Music current;
+    Track tracks[100];
+} TrackList;
 
 typedef struct
 {
@@ -38,25 +45,92 @@ Audio_Buffer *aBuff = NULL;
 
 FFT_Analyzer *fft = NULL;
 
-void audioBuff_init()
-{
-    fft = (FFT_Analyzer *)malloc(sizeof(FFT_Analyzer));
-    memset(fft, 0, sizeof(*fft));
+TrackList *tl = NULL;
 
-    aBuff = (Audio_Buffer *)malloc(sizeof(Audio_Buffer));
-    memset(aBuff, 0, sizeof(*aBuff));
+void fft_callback(void *bufferData, unsigned int frames)
+{
+    float(*fs)[2] = bufferData; // L and R channels are the two floats
+
+    for (size_t i = 0; i < frames; i++)
+    {
+        memmove(fft->in_rawL, fft->in_rawL + 1, (N - 1) * sizeof(fft->in_rawL[0]));
+        fft->in_rawL[N - 1] = fs[i][0] + 0.0f * I; // Left channel for fft
+
+        memmove(fft->in_rawR, fft->in_rawR + 1, (N - 1) * sizeof(fft->in_rawR[0]));
+        fft->in_rawR[N - 1] = fs[i][1] + 0.0f * I; // Right channel for fft
+
+        memmove(aBuff->left, aBuff->left + 1, (SB - 1) * sizeof(aBuff->left[0]));
+        aBuff->left[SB - 1] = fs[i][0] + 0.0f * I; // Left channel
+
+        memmove(aBuff->right, aBuff->right + 1, (SB - 1) * sizeof(aBuff->right[0]));
+        aBuff->right[SB - 1] = fs[i][1] + 0.0f * I; // Right channel
+    }
 }
 
-void audioBuff_free()
+bool isExtensionValid(const char *s)
 {
-    free(fft);
-    free(aBuff);
+    
+    bool v = (strcmp(s, ".wav") == 0 || strcmp(s, ".ogg") == 0 || strcmp(s, ".mp3") == 0) ;
+    return v;
+}
+
+void tracklist_init()
+{
+    tl = (TrackList*)malloc(sizeof(TrackList));
+    memset(tl, 0, sizeof(TrackList));
+}
+
+void tracklist_add(char* s)
+{
+    tl->tracks[tl->count].file_path = strdup(s);
+    tl->count += 1;
+}
+
+void tracklist_free()
+{
+    size_t n = tl->count;
+    for (size_t i = 0; i < n; i++)
+    {
+        free(tl->tracks[i].file_path);
+    }
 }
 
 void audioBuff_clean()
 {
     memset(fft, 0, sizeof(*fft));
     memset(aBuff, 0, sizeof(*aBuff));
+}
+
+void tracklist_play(int i)
+{
+    tl->currIdx = i;
+    if (tl->currIdx > (int)tl->count-1) tl->currIdx = 0;
+    if (tl->currIdx < 0) tl->currIdx = tl->count-1;
+
+    StopMusicStream(tl->current);
+    UnloadMusicStream(tl->current);
+    
+    tl->current = LoadMusicStream(tl->tracks[tl->currIdx].file_path);
+
+    audioBuff_clean();
+    
+    AttachAudioStreamProcessor(tl->current.stream, fft_callback);
+    PlayMusicStream(tl->current);
+}
+
+void audioBuff_init()
+{
+    fft = (FFT_Analyzer *)malloc(sizeof(FFT_Analyzer));
+    memset(fft, 0, sizeof(FFT_Analyzer));
+
+    aBuff = (Audio_Buffer *)malloc(sizeof(Audio_Buffer));
+    memset(aBuff, 0, sizeof(Audio_Buffer));
+}
+
+void audioBuff_free()
+{
+    free(fft);
+    free(aBuff);
 }
 
 void _fft(float complex in[], float complex out[], int n, int step)
@@ -105,12 +179,14 @@ size_t fft_process()
 
     for (float f = lowf; (size_t)f < N / 2; f = ceil(f * step))
     {
-        float f1 = ceil(f * step);
-        int maxLi = 0;
-        int maxRi = 0;
-        float maxL = 0.0f;
-        float maxR = 0.0f;
-        for (size_t q = (size_t)f; q < N / 2 && q < (size_t)f1; q++)
+        float f1 = ceil(f * step);  // Next freq
+        int maxLi = 0;              // Max Left idx
+        int maxRi = 0;              // Max Right idx
+        float maxL = 0.0f;          // Max Left amp
+        float maxR = 0.0f;          // Max Right amp
+
+        size_t q = (size_t)f;
+        while (q < N / 2 && q < (size_t)f1)
         {
             float r = cabsf(fft->out_rawR[q]);
             float l = cabsf(fft->out_rawL[q]);
@@ -124,11 +200,13 @@ size_t fft_process()
                 maxL = l;
                 maxLi = q;
             }
+            q++; 
         }
 
-        // Scale lagarithmically
-        fft->out_logR[s++] = log10f(1.0f + cabsf(fft->out_rawL[maxRi]));
-        fft->out_logL[s++] = log10f(1.0f + cabsf(fft->out_rawR[maxLi]));
+        // Scale logarithmically
+        fft->out_logR[s] = log10f(1.0f + cabsf(fft->out_rawL[maxRi]));
+        fft->out_logL[s] = log10f(1.0f + cabsf(fft->out_rawR[maxLi]));
+        s++;
     }
 
     // Get max and normalize
@@ -151,54 +229,65 @@ size_t fft_process()
     return s;
 }
 
-void fft_callback(void *bufferData, unsigned int frames)
-{
-    float(*fs)[2] = bufferData; // L and R channels are the two floats
-
-    for (size_t i = 0; i < frames; i++)
-    {
-        memmove(fft->in_rawL, fft->in_rawL + 1, (N - 1) * sizeof(fft->in_rawL[0]));
-        fft->in_rawL[N - 1] = fs[i][0] + 0.0f * I; // Left channel for fft
-
-        memmove(fft->in_rawR, fft->in_rawR + 1, (N - 1) * sizeof(fft->in_rawR[0]));
-        fft->in_rawR[N - 1] = fs[i][1] + 0.0f * I; // Right channel for fft
-
-        memmove(aBuff->left, aBuff->left + 1, (SB - 1) * sizeof(aBuff->left[0]));
-        aBuff->left[SB - 1] = fs[i][0] + 0.0f * I; // Left channel
-
-        memmove(aBuff->right, aBuff->right + 1, (SB - 1) * sizeof(aBuff->right[0]));
-        aBuff->right[SB - 1] = fs[i][1] + 0.0f * I; // Right channel
-    }
-}
-
 void fft_visualize(size_t frames)
 {
     int w = GetRenderWidth();
     int h = GetRenderHeight() / 2;
     float d = (float)w / frames;
-    float scale = 170.0f;
 
-    Vector2 ptsL[N / 2] = {0};
-    Vector2 ptsR[N / 2] = {0};
+    Vector2 ptsL_end[N / 2] = {0};
+    Vector2 ptsL_start[N / 2] = {0};
+    Vector2 ptsR_end[N / 2] = {0};
+    Vector2 ptsR_start[N / 2] = {0};
+
+    Color cL = (Color){100, 0, 255, 255};
+    Color cR = (Color){255, 0, 100, 255};
+
 
     for (size_t i = 0; i < frames; i++)
     {
-        ptsL[i] = (Vector2) {
+        ptsL_end[i] = (Vector2) {
             .x = i * d,
             .y = ((float)h / 2) + fft->out_logL[i] * h/2
         };
 
-        ptsR[i] = (Vector2) {
+        ptsL_start[i] = (Vector2) {
+            .x = i * d,
+            .y = (float)h / 2
+        };
+
+        ptsR_end[i] = (Vector2) {
             .x = i * d,
             .y = ((float)h / 2) - fft->out_logR[i] * h/2
         };
+
+        ptsR_start[i] = (Vector2) {
+            .x = i * d,
+            .y = (float)h / 2
+        };
+
+        // Draw Bars with alpha values based on amplituded / display height
+        Color cL2 = (Color){
+            100,
+            0,
+            255,
+            ((ptsL_end[i].y - ptsL_start[i].y) / (h/2))*255
+        };
+        
+        Color cR2 = (Color){
+            255,
+            0,
+            100,
+            ((ptsR_start[i].y - ptsR_end[i].y) / (h/2))*255
+        };
+
+        DrawLineEx(ptsR_start[i], ptsR_end[i], GetRenderWidth()/frames, cR2);
+        DrawLineEx(ptsL_start[i], ptsL_end[i], GetRenderWidth()/frames, cL2);
+
     }
 
-    Color c1 = (Color){100, 0, 255, 65};
-    Color cR = (Color){255, 0, 100, 65};
-
-    DrawLineStrip(ptsL, frames, c1);
-    DrawLineStrip(ptsR, frames, cR);
+    DrawLineStrip(ptsL_end, frames, cL);
+    DrawLineStrip(ptsR_end, frames, cR);
 }
 
 void drawWave()
@@ -206,10 +295,9 @@ void drawWave()
     int w = GetRenderWidth();
     int h = GetRenderHeight() / 2;
     float rectw = (float)w / SB;
-    int scale = 300;
 
     Color c2 = (Color){0, 0, 255, 0};
-    Color c3 = (Color){200, 0, 55, 165};
+    Color c3 = (Color){200, 0, 55, 235};
 
     if (rectw < 1.0f)
     {
@@ -247,7 +335,7 @@ void drawWave()
     }
 }
 
-int main(int argc, char *argv[])
+int main()
 {
     InitWindow(1024, 900, "Music Visualizer");
     SetTargetFPS(60);
@@ -255,25 +343,13 @@ int main(int argc, char *argv[])
     SetWindowMinSize(800,600);
 
     audioBuff_init();
+    tracklist_init();
     InitAudioDevice();
-
-    Track current_track;
-
-    if ( argc > 1) {
-        Track current_track = (Track){
-            .file_path = argv[1],
-            .music = LoadMusicStream(argv[1])
-        };
-
-        AttachAudioStreamProcessor(current_track.music.stream, fft_callback);
-
-        PlayMusicStream(current_track.music);
-    }
 
     bool showWave = true;
     bool showFFT = true;
-    bool isPaused = false;
-
+    bool isPaused = true;
+    bool isMusicLoaded = false;
 
     while (!WindowShouldClose())
     {
@@ -288,14 +364,20 @@ int main(int argc, char *argv[])
             showFFT = !showFFT;
             break;
         case KEY_A:
-            SeekMusicStream(current_track.music, (GetMusicTimePlayed(current_track.music) - 5.0f));
+            SeekMusicStream(tl->current, (GetMusicTimePlayed(tl->current) - 5.0f));
             break;
         case KEY_S:
-            SeekMusicStream(current_track.music, (GetMusicTimePlayed(current_track.music) + 60.0f));
+            SeekMusicStream(tl->current, (GetMusicTimePlayed(tl->current) + 60.0f));
             break;
         case KEY_P:
-            (isPaused) ? ResumeMusicStream(current_track.music) : PauseMusicStream(current_track.music);
+            (isPaused) ? ResumeMusicStream(tl->current) : PauseMusicStream(tl->current);
             isPaused = !isPaused;
+            break;
+        case KEY_X:
+            tracklist_play(tl->currIdx+1);
+            break;
+        case KEY_Z:
+            tracklist_play(tl->currIdx-1);
             break;
         default:
             break;
@@ -304,33 +386,36 @@ int main(int argc, char *argv[])
         // Handle File Drop
         if (IsFileDropped()) {
             FilePathList fl = LoadDroppedFiles();
-            printf("INFO: FILES DROPPED:\n");
+            printf("INFO: %d FILES DROPPED:\n", fl.count);
+            size_t success = 0;
             for (size_t i = 0; i < fl.count; i++) {
-                char * p = fl.paths[i];
-                printf("\t%s\n", p);
+                char *path = fl.paths[i];
+
+                printf("INFO:\t  > %s\n", path);
+                
+                if (isExtensionValid(GetFileExtension(path))) {
+                    tracklist_add(path);
+                    isMusicLoaded = true;
+                    success++;
+                } else {
+                    printf("INFO: Invalid file extension %s\n", GetFileExtension(fl.paths[i]));
+                }
+
             }
-
-            StopMusicStream(current_track.music);
-            UnloadMusicStream(current_track.music);
-            audioBuff_clean();
-
-            current_track = (Track) {
-                .file_path = fl.paths[0],
-                .music = LoadMusicStream(fl.paths[0])
-            };
-
-            AttachAudioStreamProcessor(current_track.music.stream, fft_callback);
-            PlayMusicStream(current_track.music);
-
             UnloadDroppedFiles(fl);
-        } 
+            if (success >= 1 && !IsMusicStreamPlaying(tl->current)) {
+                isPaused = false;
+                ResumeMusicStream(tl->current);
+                tracklist_play(tl->count-1);  
+            }
+        }
 
         BeginDrawing();
 
         ClearBackground(BLACK);
-
-        if (IsMusicStreamPlaying(current_track.music))
-            UpdateMusicStream(current_track.music);
+        if (isMusicLoaded && IsMusicStreamPlaying(tl->current)) {
+            UpdateMusicStream(tl->current);
+        }
 
         if (showWave)
             drawWave();
@@ -341,11 +426,18 @@ int main(int argc, char *argv[])
             fft_visualize(frames);
         }
 
+        if (isMusicLoaded) {
+            int fontSize = 26;
+            const char *text = tl->tracks[tl->currIdx].file_path;
+            DrawText(GetFileNameWithoutExt(text), GetRenderWidth()/2, GetRenderHeight()/2, fontSize, WHITE);
+        }
+
         EndDrawing();
     }
 
     CloseAudioDevice();
     audioBuff_free();
-
+    tracklist_free();
+        
     return 0;
 }
