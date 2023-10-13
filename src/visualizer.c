@@ -288,6 +288,28 @@ void fft_visualize(size_t frames, int w, int h)
     DrawLineStrip(ptsR_end, frames, cR);
 }
 
+void fft_visualize2(size_t frames, int w, int h)
+{
+    frames -= 250;
+    float radius = h/2;
+
+    Vector2 ptsL_end[N/2] = {0};
+
+    for (size_t i = 0; i < frames; i++)
+    {
+        float angle = (2.1 * PI * i) / frames;
+        
+        Vector2 v = (Vector2) {
+            .x = w/2 + radius *  fft->out_logL[i] * cosf(angle),
+            .y = h/2 + radius *  fft->out_logL[i] * sinf(angle)
+        };        
+
+        ptsL_end[i] = v;
+    }
+
+    DrawLineStrip(ptsL_end, frames, RED);
+}
+
 void drawWave(int w, int h)
 {
     float rectw = (float)w / SB;
@@ -342,8 +364,11 @@ int main()
     tracklist_init();
     InitAudioDevice();
 
+    size_t vis = 0;
     bool showWave = true;
     bool showFFT = true;
+    bool showFFT2 = false;
+
     bool isPaused = true;
     bool isMusicLoaded = false;
 
@@ -356,30 +381,55 @@ int main()
         int key = GetKeyPressed();
         switch (key)
         {
-        case KEY_Q:
-            showWave = !showWave;
-            break;
-        case KEY_W:
-            showFFT = !showFFT;
-            break;
-        case KEY_A:
-            SeekMusicStream(tl->current, (GetMusicTimePlayed(tl->current) - 5.0f));
-            break;
-        case KEY_S:
-            SeekMusicStream(tl->current, (GetMusicTimePlayed(tl->current) + 60.0f));
-            break;
-        case KEY_P:
-            (isPaused) ? ResumeMusicStream(tl->current) : PauseMusicStream(tl->current);
-            isPaused = !isPaused;
-            break;
-        case KEY_X:
-            tracklist_play(tl->currIdx+1);
-            break;
-        case KEY_Z:
-            tracklist_play(tl->currIdx-1);
-            break;
-        default:
-            break;
+            case KEY_Q:
+                vis = (vis+1) % 4;
+
+                switch(vis)
+                {
+                    case 0:
+                        showWave = true;
+                        showFFT = true;
+                        showFFT2 = false;
+                        break;
+                    case 1:
+                        showFFT = true;
+                        showWave = false;
+                        break;
+                    case 2:
+                        showFFT = false;
+                        showWave = true;
+                        break;
+                    case 3:
+                        showWave = false;
+                        showFFT2 = true;
+                        break;
+                    default:
+                        break;
+                }
+
+                break;
+            case KEY_A:
+                if (tl->count > 0)
+                    SeekMusicStream(tl->current, (GetMusicTimePlayed(tl->current) - 5.0f));
+                break;
+            case KEY_S:
+                if (tl->count > 0)
+                    SeekMusicStream(tl->current, (GetMusicTimePlayed(tl->current) + 60.0f));
+                break;
+            case KEY_P:
+                (isPaused) ? ResumeMusicStream(tl->current) : PauseMusicStream(tl->current);
+                isPaused = !isPaused;
+                break;
+            case KEY_X:
+                if (tl->count > 0)
+                    tracklist_play(tl->currIdx+1);
+                break;
+            case KEY_Z:
+                if (tl->count > 0)
+                    tracklist_play(tl->currIdx-1);
+                break;
+            default:
+                break;
         }
 
         // Handle File Drop
@@ -412,6 +462,7 @@ int main()
         BeginDrawing();
 
         ClearBackground(BLACK);
+
         if (isMusicLoaded && IsMusicStreamPlaying(tl->current)) {
             UpdateMusicStream(tl->current);
         }
@@ -419,10 +470,18 @@ int main()
         if (showWave)
             drawWave(w, h/2);
 
+        size_t frames = 0;
+        if (showFFT || showFFT2)
+            frames = fft_process();
+
         if (showFFT)
         {
-            size_t frames = fft_process();
             fft_visualize(frames, w, h/2);
+        }
+
+        if (showFFT2)
+        {
+            fft_visualize2(frames, w, h);
         }
 
         if (isMusicLoaded) {
