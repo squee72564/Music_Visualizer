@@ -7,7 +7,7 @@
 #include "raylib.h"
 
 #define N (1 << 14)
-#define SB (1 << 11)
+#define SB (1 << 10)
 
 typedef struct
 {
@@ -229,10 +229,8 @@ size_t fft_process()
     return s;
 }
 
-void fft_visualize(size_t frames)
+void fft_visualize(size_t frames, int w, int h)
 {
-    int w = GetRenderWidth();
-    int h = GetRenderHeight() / 2;
     float d = (float)w / frames;
 
     Vector2 ptsL_end[N / 2] = {0};
@@ -281,8 +279,8 @@ void fft_visualize(size_t frames)
             ((ptsR_start[i].y - ptsR_end[i].y) / (h/2))*255
         };
 
-        DrawLineEx(ptsR_start[i], ptsR_end[i], GetRenderWidth()/frames, cR2);
-        DrawLineEx(ptsL_start[i], ptsL_end[i], GetRenderWidth()/frames, cL2);
+        DrawLineEx(ptsR_start[i], ptsR_end[i], d, cR2);
+        DrawLineEx(ptsL_start[i], ptsL_end[i], d, cL2);
 
     }
 
@@ -290,10 +288,8 @@ void fft_visualize(size_t frames)
     DrawLineStrip(ptsR_end, frames, cR);
 }
 
-void drawWave()
+void drawWave(int w, int h)
 {
-    int w = GetRenderWidth();
-    int h = GetRenderHeight() / 2;
     float rectw = (float)w / SB;
 
     Color c2 = (Color){0, 0, 255, 0};
@@ -340,7 +336,7 @@ int main()
     InitWindow(1024, 900, "Music Visualizer");
     SetTargetFPS(60);
     SetWindowState(FLAG_WINDOW_RESIZABLE);
-    SetWindowMinSize(800,600);
+    SetWindowMinSize(1024,900);
 
     audioBuff_init();
     tracklist_init();
@@ -353,6 +349,9 @@ int main()
 
     while (!WindowShouldClose())
     {
+        int w = GetRenderWidth();
+        int h = GetRenderHeight();
+
         // Handle Key Press
         int key = GetKeyPressed();
         switch (key)
@@ -418,18 +417,40 @@ int main()
         }
 
         if (showWave)
-            drawWave();
+            drawWave(w, h/2);
 
         if (showFFT)
         {
             size_t frames = fft_process();
-            fft_visualize(frames);
+            fft_visualize(frames, w, h/2);
         }
 
         if (isMusicLoaded) {
-            int fontSize = 26;
-            const char *text = tl->tracks[tl->currIdx].file_path;
-            DrawText(GetFileNameWithoutExt(text), GetRenderWidth()/2, GetRenderHeight()/2, fontSize, WHITE);
+            Font font = GetFontDefault();
+            int fontSize = 24;
+            int spacing = 1;
+            const char *fileName = GetFileNameWithoutExt(tl->tracks[tl->currIdx].file_path);
+            const char *fileExt = GetFileExtension(tl->tracks[tl->currIdx].file_path);
+            
+            Vector2 fileNameV = MeasureTextEx(font, fileName, fontSize, spacing);
+            Vector2 fileExtV = MeasureTextEx(font, fileExt, fontSize, spacing);
+
+            DrawTextEx(
+                font,
+                fileName,
+                (Vector2){GetRenderWidth()/2-fileNameV.x/2, GetRenderHeight()/2},
+                fontSize,
+                spacing,
+                WHITE
+            );
+            DrawTextEx(
+                font,
+                fileExt,
+                (Vector2){GetRenderWidth()/2-fileExtV.x/2, GetRenderHeight()/2+fileNameV.y},
+                fontSize,
+                spacing,
+                WHITE
+            );
         }
 
         EndDrawing();
