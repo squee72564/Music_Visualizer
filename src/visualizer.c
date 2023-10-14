@@ -353,6 +353,65 @@ void drawWave(int w, int h)
     }
 }
 
+void drawSongInfo(int w, int h)
+{
+    Font font = GetFontDefault();
+    int fontSize = 24;
+    int spacing = 1;
+    const char *fileName = GetFileNameWithoutExt(tl->tracks[tl->currIdx].file_path);
+    const char *fileExt = GetFileExtension(tl->tracks[tl->currIdx].file_path);
+            
+    Vector2 fileNameV = MeasureTextEx(font, fileName, fontSize, spacing);
+    Vector2 fileExtV = MeasureTextEx(font, fileExt, fontSize, spacing);
+            
+    DrawTextEx(
+        font,
+        fileName,
+        (Vector2){w-fileNameV.x/2, h},
+        fontSize,
+        spacing,
+        WHITE
+    );
+    DrawTextEx(
+        font,
+        fileExt,
+        (Vector2){w-fileExtV.x/2, h+fileNameV.y},
+        fontSize,
+        spacing,
+        WHITE
+    );
+}
+
+bool handleFileDrop(bool *isPaused)
+{
+    FilePathList fl = LoadDroppedFiles();
+    printf("INFO: %d FILES DROPPED:\n", fl.count);
+    size_t success = 0;
+
+    for (size_t i = 0; i < fl.count; i++) {
+        char *path = fl.paths[i];
+
+        printf("INFO:\t  > %s\n", path);
+        
+        if (isExtensionValid(GetFileExtension(path))) {
+            tracklist_add(path);
+            success++;
+        } else {
+            printf("INFO: Invalid file extension %s\n", GetFileExtension(fl.paths[i]));
+        }
+
+    }
+    UnloadDroppedFiles(fl);
+    if (success >= 1 && !IsMusicStreamPlaying(tl->current)) {
+        *isPaused = false;
+        ResumeMusicStream(tl->current);
+        tracklist_play(tl->count-1);  
+    }
+   
+    if (tl->count <= 0) return false; 
+    return true;
+}
+
 int main()
 {
     InitWindow(1024, 900, "Music Visualizer");
@@ -432,85 +491,39 @@ int main()
                 break;
         }
 
-        // Handle File Drop
         if (IsFileDropped()) {
-            FilePathList fl = LoadDroppedFiles();
-            printf("INFO: %d FILES DROPPED:\n", fl.count);
-            size_t success = 0;
-            for (size_t i = 0; i < fl.count; i++) {
-                char *path = fl.paths[i];
-
-                printf("INFO:\t  > %s\n", path);
-                
-                if (isExtensionValid(GetFileExtension(path))) {
-                    tracklist_add(path);
-                    isMusicLoaded = true;
-                    success++;
-                } else {
-                    printf("INFO: Invalid file extension %s\n", GetFileExtension(fl.paths[i]));
-                }
-
-            }
-            UnloadDroppedFiles(fl);
-            if (success >= 1 && !IsMusicStreamPlaying(tl->current)) {
-                isPaused = false;
-                ResumeMusicStream(tl->current);
-                tracklist_play(tl->count-1);  
-            }
+            isMusicLoaded = handleFileDrop(&isPaused);
         }
 
         BeginDrawing();
 
-        ClearBackground(BLACK);
+            ClearBackground(BLACK);
 
-        if (isMusicLoaded && IsMusicStreamPlaying(tl->current)) {
-            UpdateMusicStream(tl->current);
-        }
+            if (isMusicLoaded && IsMusicStreamPlaying(tl->current)) {
+                UpdateMusicStream(tl->current);
+            }
 
-        if (showWave)
-            drawWave(w, h/2);
+            if (showWave)
+                drawWave(w, h/2);
 
-        size_t frames = 0;
-        if (showFFT || showFFT2)
-            frames = fft_process();
+            size_t frames = 0;
+            if (showFFT || showFFT2)
+                frames = fft_process();
 
-        if (showFFT)
-        {
-            fft_visualize(frames, w, h/2);
-        }
+            if (showFFT)
+            {
+                fft_visualize(frames, w, h/2);
+            }
 
-        if (showFFT2)
-        {
-            fft_visualize2(frames, w, h);
-        }
+            if (showFFT2)
+            {
+                fft_visualize2(frames, w, h);
+            }
 
-        if (isMusicLoaded) {
-            Font font = GetFontDefault();
-            int fontSize = 24;
-            int spacing = 1;
-            const char *fileName = GetFileNameWithoutExt(tl->tracks[tl->currIdx].file_path);
-            const char *fileExt = GetFileExtension(tl->tracks[tl->currIdx].file_path);
-            
-            Vector2 fileNameV = MeasureTextEx(font, fileName, fontSize, spacing);
-            Vector2 fileExtV = MeasureTextEx(font, fileExt, fontSize, spacing);
-
-            DrawTextEx(
-                font,
-                fileName,
-                (Vector2){GetRenderWidth()/2-fileNameV.x/2, GetRenderHeight()/2},
-                fontSize,
-                spacing,
-                WHITE
-            );
-            DrawTextEx(
-                font,
-                fileExt,
-                (Vector2){GetRenderWidth()/2-fileExtV.x/2, GetRenderHeight()/2+fileNameV.y},
-                fontSize,
-                spacing,
-                WHITE
-            );
-        }
+            if (isMusicLoaded) {
+                if (showFFT2) drawSongInfo(w/2, h/10);
+                else drawSongInfo(w/2, h/2);
+            }
 
         EndDrawing();
     }
