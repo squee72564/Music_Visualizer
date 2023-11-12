@@ -1,7 +1,8 @@
-CC = gcc
-CFLAGS = -O2 -Wall -Wextra 
-LDFLAGS = -I ./include/ -L ./lib/
-LDLIBS = -lraylib -lopengl32 -lgdi32 -lwinmm
+CC = gcc-13
+CFLAGS = -Wall -Wextra -o2 -std=c99
+OSLIBS = -framework CoreVideo -framework IOKit -framework Cocoa -framework GLUT -framework OpenGL
+LIBS = -L ./lib/ ./lib/librarylib.a
+INCLUDES = -I ./include/
 
 main : src/visualizer.c
-	$(CC) $(CFLAGS) -o visualizer.exe src/visualizer.c $(LDFLAGS) $(LDLIBS)
+	$(CC) $(CFLAGS) -o visualizer  src/visualizer.c $(OSLIBS) $(LIBS) $(INCLUDES)

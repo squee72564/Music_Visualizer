@@ -1,2 +1,5 @@
 *.exe
 music/
+Makefile
+visualizer
+.DS_Store
