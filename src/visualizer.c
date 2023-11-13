@@ -1,3 +1,4 @@
+#include <time.h>
 #include <math.h>
 #include <complex.h>
 #include <stdio.h>
@@ -8,6 +9,8 @@
 
 #define N (1 << 14)
 #define SB (1 << 10)
+
+#define VB 20 
 
 typedef struct
 {
@@ -41,7 +44,17 @@ typedef struct
     float complex left[SB];
 } Audio_Buffer;
 
+typedef struct 
+{
+    Vector2 out[VB][N];
+    Vector2 out2[VB][N];
+    Color col[VB];
+    Color col2[VB];
+} Visualizer;
+
 Audio_Buffer *aBuff = NULL;
+
+Visualizer *vis = NULL;
 
 FFT_Analyzer *fft = NULL;
 
@@ -125,12 +138,28 @@ void audioBuff_init()
 
     aBuff = (Audio_Buffer *)malloc(sizeof(Audio_Buffer));
     memset(aBuff, 0, sizeof(Audio_Buffer));
+
+    vis = (Visualizer *)malloc(sizeof(Visualizer));
+    memset(vis, 0, sizeof(Visualizer));
+    vis->col[0] = (Color) {
+        .r = 80,
+        .g = 100,
+        .b = 120,
+        .a = 255,
+    };
+    vis->col2[0] = (Color) {
+        .r = 120,
+        .g = 100,
+        .b = 80,
+        .a = 255,
+    };
 }
 
 void audioBuff_free()
 {
     free(fft);
     free(aBuff);
+    free(vis);
 }
 
 void _fft(float complex in[], float complex out[], int n, int step)
@@ -291,23 +320,161 @@ void fft_visualize(size_t frames, int w, int h)
 void fft_visualize2(size_t frames, int w, int h)
 {
     frames -= 250;
-    float radius = h/2;
+    float radius = 2.3f*h/5.0f;
 
-    Vector2 ptsL_end[N/2] = {0};
+    // This number represents the highest element of the buffer for the internal visualization
+    size_t lowCap = 100;
 
-    for (size_t i = 0; i < frames; i++)
-    {
-        float angle = (2.1 * PI * i) / frames;
-        
-        Vector2 v = (Vector2) {
-            .x = w/2 + radius *  fft->out_logL[i] * cosf(angle),
-            .y = h/2 + radius *  fft->out_logL[i] * sinf(angle)
-        };        
+    // Get change in color for outer visualization 
+    Color prev = vis->col[0];
 
-        ptsL_end[i] = v;
+    int red = prev.r;
+    int green = prev.g;
+    int blue = prev.b;
+
+    switch (GetRandomValue(0,2)) {
+        case 0:
+            red = GetRandomValue(prev.r - 1, prev.r + 1);
+            break;
+        case 1:
+            green = GetRandomValue(prev.g - 1, prev.g + 1);
+            break;
+        case 2:
+            blue = GetRandomValue(prev.b - 1, prev.b + 1);
+            break;
+        default:
+            break;
     }
 
-    DrawLineStrip(ptsL_end, frames, RED);
+    int total = red + green + blue;
+
+    red = 255 * ((float)red/total);
+    green = 255 * ((float)green/total);
+    blue = 255 * ((float)blue/total);
+
+    Color newColor =  (Color) {
+        .r = red, 
+        .g = green,
+        .b = blue,
+        .a = 255,
+    };
+
+    vis->col[0] = newColor; 
+    
+    // Save fft data to most recent visualization buffer 
+    for (size_t i = lowCap; i < frames; i++)
+    {
+        if (i == (frames-1)) {
+            vis->out[0][frames-lowCap-1] = vis->out[0][0];
+            break;
+        }
+        
+        float angle = (2.0f * PI * (i-lowCap)) / (frames-lowCap);
+
+        float val = 0.0f;;
+        
+        if (fft->out_logL[i] < 0.20f) {
+            val = 0.17f;
+        } else {
+            val = fft->out_logL[i];
+        }
+
+        vis->out[0][i-lowCap] = (Vector2) {
+            .x =  w/2 + radius * val * cosf(angle),
+            .y =  h/2 + radius * val * sinf(angle),
+        };        
+    }
+
+    // Swap newer visualization data buffers with older ones, keeping track of
+    // past VB frames of data
+    for (int i = VB - 1; i >= 1; i--) {
+        memmove(vis->out[i], vis->out[i-1], sizeof(Vector2) * (frames-lowCap));
+        memmove(&vis->col[i], &vis->col[i-1], sizeof(Color));
+    }
+
+    // Draw all visualization data buffers and bring alpha value down as data
+    // gets older for fading effect
+
+    DrawLineStrip(vis->out[0], frames-lowCap, vis->col[0]);
+    
+    for (int i = 1; i < VB; i++) {
+        float frac = (float)i / VB;
+        
+        vis->col[i].a = (1-frac) * 140;
+
+        DrawLineStrip(vis->out[i], frames-lowCap, vis->col[i]);
+    }
+
+    // Repeat steps for internal visualization
+
+    prev = vis->col2[0];
+
+    red = prev.r;
+    green = prev.g;
+    blue = prev.b;
+
+    switch (GetRandomValue(0,2)) {
+        case 0:
+            red = GetRandomValue(prev.r - 1, prev.r + 1);
+            break;
+        case 1:
+            green = GetRandomValue(prev.g - 1, prev.g + 1);
+            break;
+        case 2:
+            blue = GetRandomValue(prev.b - 1, prev.b + 1);
+            break;
+        default:
+            break;
+    }
+
+    total = red + green + blue;
+
+    red = 255 * ((float)red/total);
+    green = 255 * ((float)green/total);
+    blue = 255 * ((float)blue/total);
+
+    newColor =  (Color) {
+        .r = red, 
+        .g = green,
+        .b = blue,
+        .a = 255,
+    };
+
+    vis->col2[0] = newColor; 
+
+
+    for (size_t i = 0; i < lowCap; i++)
+    {
+        if (i == (lowCap-1)) {
+            vis->out2[0][lowCap-1] = vis->out2[0][0];
+            break;
+        }
+
+        float angle = (2.0f * PI * i) / (lowCap);
+
+        float val = 0.0f;;
+        val = fft->out_logL[i];
+        
+        vis->out2[0][i] = (Vector2) {
+            .x =  w/2 + radius/6 * val * cosf(angle),
+            .y =  h/2 + radius/6 * val * sinf(angle),
+        };        
+    }
+
+    for (int i = VB - 1; i >= 1; i--) {
+        memmove(vis->out2[i], vis->out2[i-1], sizeof(Vector2) * lowCap);
+        memmove(&vis->col2[i], &vis->col2[i-1], sizeof(Color));
+    }
+
+    DrawLineStrip(vis->out2[0], lowCap, vis->col2[0]);
+    
+    for (int i = 1; i < VB; i++) {
+        float frac = (float)i / VB;
+        
+        vis->col2[i].a = (1-frac) * 20;
+
+        DrawLineStrip(vis->out2[i], lowCap, vis->col2[i]);
+    }
 }
 
 void drawWave(int w, int h)
@@ -422,6 +589,10 @@ int main()
     audioBuff_init();
     tracklist_init();
     InitAudioDevice();
+
+    time_t t;
+    t = time(NULL);
+    SetRandomSeed(t);
 
     size_t vis = 0;
     bool showWave = true;
