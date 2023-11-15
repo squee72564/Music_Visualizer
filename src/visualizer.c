@@ -7,10 +7,14 @@
 #include <assert.h>
 #include "raylib.h"
 
+#include "raylib.h"
+
+#define GLSL_VERSION 330
+
 #define N (1 << 14)
 #define SB (1 << 10)
 
-#define VB 20 
+#define VB 100 
 
 typedef struct
 {
@@ -59,6 +63,160 @@ Visualizer *vis = NULL;
 FFT_Analyzer *fft = NULL;
 
 TrackList *tl = NULL;
+
+void fft_callback(void *bufferData, unsigned int frames);
+bool isExtensionValid(const char *s);
+void tracklist_init();
+void tracklist_add(char* s);
+void tracklist_free();
+void audioBuff_clean();
+void tracklist_play(int i);
+void audioBuff_init();
+void audioBuff_free();
+void _fft(float complex in[], float complex out[], int n, int step);
+size_t fft_process();
+void fft_visualize(size_t frames, int w, int h);
+void fft_visualize2(size_t frames, int w, int h);
+void drawWave(int w, int h);
+void drawSongInfo(int w, int h);
+bool handleFileDrop(bool *isPaused);
+
+int main()
+{
+
+    SetConfigFlags(FLAG_MSAA_4X_HINT);
+
+    InitWindow(1024, 900, "Music Visualizer");
+    SetTargetFPS(60);
+    SetWindowState(FLAG_WINDOW_RESIZABLE);
+    SetWindowMinSize(1024,900);
+
+    //Shader shader = LoadShader(0, TextFormat("./shaders/glsl%i/circle.fs", GLSL_VERSION));
+
+    audioBuff_init();
+    tracklist_init();
+    InitAudioDevice();
+
+    time_t t;
+    t = time(NULL);
+    SetRandomSeed(t);
+
+    size_t vis = 0;
+    bool showWave = true;
+    bool showFFT = true;
+    bool showFFT2 = false;
+
+    bool isPaused = true;
+    bool isMusicLoaded = false;
+
+    while (!WindowShouldClose())
+    {
+        int w = GetRenderWidth();
+        int h = GetRenderHeight();
+
+        // Handle Key Press
+        int key = GetKeyPressed();
+        switch (key)
+        {
+            case KEY_Q:
+                vis = (vis+1) % 4;
+
+                switch(vis)
+                {
+                    case 0:
+                        showWave = true;
+                        showFFT = true;
+                        showFFT2 = false;
+                        break;
+                    case 1:
+                        showFFT = true;
+                        showWave = false;
+                        break;
+                    case 2:
+                        showFFT = false;
+                        showWave = true;
+                        break;
+                    case 3:
+                        showWave = false;
+                        showFFT2 = true;
+                        break;
+                    default:
+                        break;
+                }
+
+                break;
+            case KEY_A:
+                if (tl->count > 0)
+                    SeekMusicStream(tl->current, (GetMusicTimePlayed(tl->current) - 5.0f));
+                break;
+            case KEY_S:
+                if (tl->count > 0)
+                    SeekMusicStream(tl->current, (GetMusicTimePlayed(tl->current) + 60.0f));
+                break;
+            case KEY_P:
+                (isPaused) ? ResumeMusicStream(tl->current) : PauseMusicStream(tl->current);
+                isPaused = !isPaused;
+                break;
+            case KEY_X:
+                if (tl->count > 0)
+                    tracklist_play(tl->currIdx+1);
+                break;
+            case KEY_Z:
+                if (tl->count > 0)
+                    tracklist_play(tl->currIdx-1);
+                break;
+            default:
+                break;
+        }
+
+        if (IsFileDropped()) {
+            isMusicLoaded = handleFileDrop(&isPaused);
+        }
+
+        BeginDrawing();
+
+            ClearBackground(BLACK);
+
+            if (isMusicLoaded && IsMusicStreamPlaying(tl->current)) {
+                UpdateMusicStream(tl->current);
+            }
+
+            if (showWave)
+                drawWave(w, h/2);
+
+            size_t frames = 0;
+            if (showFFT || showFFT2)
+                frames = fft_process();
+
+            if (showFFT)
+            {
+                fft_visualize(frames, w, h/2);
+            }
+            
+
+            if (showFFT2)
+            {
+                //BeginShaderMode(shader);
+                    fft_visualize2(frames, w, h);
+                //EndShaderMode();
+            }
+
+
+            if (isMusicLoaded) {
+                if (showFFT2) drawSongInfo(w/2, h/10);
+                else drawSongInfo(w/2, h/2);
+            }
+
+        EndDrawing();
+    }
+    
+    //UnloadShader(shader);
+    CloseAudioDevice();
+    audioBuff_free();
+    tracklist_free();
+        
+    return 0;
+}
 
 void fft_callback(void *bufferData, unsigned int frames)
 {
@@ -400,12 +558,21 @@ void fft_visualize2(size_t frames, int w, int h)
     for (int i = 1; i < VB; i++) {
         float frac = (float)i / VB;
         
-        vis->col[i].a = (1-frac) * 140;
+        vis->col[i].a = (1-frac) * 100;
 
         DrawLineStrip(vis->out[i], frames-lowCap, vis->col[i]);
     }
 
     // Repeat steps for internal visualization
+
+    Color circleColor = (Color) {
+        .r = vis->col[0].r,
+        .g = vis->col[0].g,
+        .b = vis->col[0].b,
+        .a = 40,
+    };
+
+    DrawCircle((float)w/2.0f, (float)h/2.0f, radius * 0.17f, circleColor);
 
     prev = vis->col2[0];
 
@@ -471,10 +638,11 @@ void fft_visualize2(size_t frames, int w, int h)
     for (int i = 1; i < VB; i++) {
         float frac = (float)i / VB;
         
-        vis->col2[i].a = (1-frac) * 20;
+        vis->col2[i].a = (1-frac) * 80;
 
         DrawLineStrip(vis->out2[i], lowCap, vis->col2[i]);
     }
+    
 }
 
 void drawWave(int w, int h)
@@ -534,7 +702,10 @@ void drawSongInfo(int w, int h)
     DrawTextEx(
         font,
         fileName,
-        (Vector2){w-fileNameV.x/2, h},
+        (Vector2) {
+            .x = w-fileNameV.x/2,
+            .y = h,
+        },
         fontSize,
         spacing,
         WHITE
@@ -542,7 +713,10 @@ void drawSongInfo(int w, int h)
     DrawTextEx(
         font,
         fileExt,
-        (Vector2){w-fileExtV.x/2, h+fileNameV.y},
+        (Vector2) {
+            .x = w-fileExtV.x/2,
+            .y = h+fileNameV.y,
+        },
         fontSize,
         spacing,
         WHITE
@@ -577,131 +751,4 @@ bool handleFileDrop(bool *isPaused)
    
     if (tl->count <= 0) return false; 
     return true;
-}
-
-int main()
-{
-    InitWindow(1024, 900, "Music Visualizer");
-    SetTargetFPS(60);
-    SetWindowState(FLAG_WINDOW_RESIZABLE);
-    SetWindowMinSize(1024,900);
-
-    audioBuff_init();
-    tracklist_init();
-    InitAudioDevice();
-
-    time_t t;
-    t = time(NULL);
-    SetRandomSeed(t);
-
-    size_t vis = 0;
-    bool showWave = true;
-    bool showFFT = true;
-    bool showFFT2 = false;
-
-    bool isPaused = true;
-    bool isMusicLoaded = false;
-
-    while (!WindowShouldClose())
-    {
-        int w = GetRenderWidth();
-        int h = GetRenderHeight();
-
-        // Handle Key Press
-        int key = GetKeyPressed();
-        switch (key)
-        {
-            case KEY_Q:
-                vis = (vis+1) % 4;
-
-                switch(vis)
-                {
-                    case 0:
-                        showWave = true;
-                        showFFT = true;
-                        showFFT2 = false;
-                        break;
-                    case 1:
-                        showFFT = true;
-                        showWave = false;
-                        break;
-                    case 2:
-                        showFFT = false;
-                        showWave = true;
-                        break;
-                    case 3:
-                        showWave = false;
-                        showFFT2 = true;
-                        break;
-                    default:
-                        break;
-                }
-
-                break;
-            case KEY_A:
-                if (tl->count > 0)
-                    SeekMusicStream(tl->current, (GetMusicTimePlayed(tl->current) - 5.0f));
-                break;
-            case KEY_S:
-                if (tl->count > 0)
-                    SeekMusicStream(tl->current, (GetMusicTimePlayed(tl->current) + 60.0f));
-                break;
-            case KEY_P:
-                (isPaused) ? ResumeMusicStream(tl->current) : PauseMusicStream(tl->current);
-                isPaused = !isPaused;
-                break;
-            case KEY_X:
-                if (tl->count > 0)
-                    tracklist_play(tl->currIdx+1);
-                break;
-            case KEY_Z:
-                if (tl->count > 0)
-                    tracklist_play(tl->currIdx-1);
-                break;
-            default:
-                break;
-        }
-
-        if (IsFileDropped()) {
-            isMusicLoaded = handleFileDrop(&isPaused);
-        }
-
-        BeginDrawing();
-
-            ClearBackground(BLACK);
-
-            if (isMusicLoaded && IsMusicStreamPlaying(tl->current)) {
-                UpdateMusicStream(tl->current);
-            }
-
-            if (showWave)
-                drawWave(w, h/2);
-
-            size_t frames = 0;
-            if (showFFT || showFFT2)
-                frames = fft_process();
-
-            if (showFFT)
-            {
-                fft_visualize(frames, w, h/2);
-            }
-
-            if (showFFT2)
-            {
-                fft_visualize2(frames, w, h);
-            }
-
-            if (isMusicLoaded) {
-                if (showFFT2) drawSongInfo(w/2, h/10);
-                else drawSongInfo(w/2, h/2);
-            }
-
-        EndDrawing();
-    }
-
-    CloseAudioDevice();
-    audioBuff_free();
-    tracklist_free();
-        
-    return 0;
 }
